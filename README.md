@@ -1,52 +1,53 @@
-# Araç Kiralama Sistemi
+# 🚗 ARAÇ KİRALAMA YÖNETİM SİSTEMİ
 
-Python ile geliştirilmiş terminal tabanlı araç kiralama yönetim sistemidir. Araç, kullanıcı ve kiralama süreçlerini nesne yönelimli programlama (OOP) yapısı ile yönetir.
-
-
-# Özellikler
-
-# Araç Modülü
-
-* Araç ekleme
-* Araç silme
-* Araç listeleme
-* Kilometre takibi
-* Müsaitlik kontrolü
-
-# Kullanıcı Modülü
-
-* Kullanıcı ekleme
-* Kullanıcı silme
-* Kullanıcı listeleme
-* Kullanıcı kiralama geçmişi görüntüleme
-
-# Kiralama Modülü
-
-* Kiralama başlatma
-* Kiralama bitirme
-* Başlangıç ve bitiş zamanı takibi
-* Araç kilometre güncelleme
-* Kullanılan kilometre hesaplama
-* Kiralama geçmişi listeleme
+Profesyonel ve kullanıcı dostu bir Araç Kiralama Yönetim Sistemi. PyQt5 ve Matplotlib kullanarak modern bir arayüz sunmaktadır.
 
 
-# Kullanılan Yapılar
+# 🎯 Özellikler
 
-* Python sınıfları (OOP)
-* List veri yapısı (araçlar, kullanıcılar, kiralamalar)
-* Datetime modülü (zaman takibi)
-* Terminal tabanlı kullanıcı arayüzü
-* In-memory veri yönetimi (veritabanı yok)
+# 📊 Dashboard
+- **🚗 Toplam Araçlar** - Sistemde kayıtlı araç sayısı
+- **👥 Toplam Kullanıcılar** - Kayıtlı müşteri sayısı
+- **🔑 Toplam Kiralamalar** - Yapılan kiralama işlemleri sayısı
+- Gerçek zamanlı güncelleme (500ms aralıkta)
 
+# 🚗 Araç Yönetimi
+- ➕ **Araç Ekle** - Marka, Model, Yıl, KM, Plaka ile araç kaydı
+- 📝 **Araç Durumu Görüntüleme** - Müsait/Kirada durumu
+- 🗑️ **Araç Sil** - Seçili aracı silme (sadece müsait araçlar)
+- 🔄 **Yenile** - Araç listesini güncelleme
+- Detaylı araç tablosu
 
-# Sistem Mantığı
+# 👥 Kullanıcı Yönetimi
+- ➕ **Kullanıcı Ekle** - Ad, Soyad, Ehliyet, Telefon, Email ile yeni kullanıcı kaydı
+- 🔍 **Kullanıcı Listesi** - Tüm müşterileri görüntüleme
+- 🗑️ **Kullanıcı Sil** - Seçili kullanıcıyı silme
+- 🔄 **Yenile** - Kullanıcı listesini güncelleme
+- Email ve telefon doğrulama
 
-* Araçlar sisteme eklenir ve listede tutulur
-* Kullanıcılar oluşturulur ve sisteme eklenir
-* Kullanıcı araç kiralama işlemi başlatır
-* Kiralama sırasında araç müsaitlik durumu değişir
-* Kiralama bitince araç kilometresi güncellenir
-* Tüm kiralama işlemleri geçmiş olarak saklanır
+# 🔑 Kiralama Yönetimi
+- 🔑 **Kiralama Başlat** - Araç ve kullanıcı seçerek kiralama işlemi başlatma
+- 🔓 **Kiralama Bitir** - Aktif kiralamaları bitirme (son KM bilgisi)
+- 📊 **Kiralama Geçmişi** - Tüm kiralamalar ve detaylar
+- 💰 **Otomatik Ücret Hesaplama** - Gün bazında kiralama ücreti
+- Kapasite kontrolü (sadece müsait araçlar kiralanabilir)
 
+# 💰 Gelir Takibi
+- 💵 **Kiralama Ücreti Hesaplama** - Günlük fiyat × gün sayısı
+- 📈 **Gelir Raporu** - Toplam gelir ve detaylı analiz
+- 📊 **Kullanılan KM Takibi** - Her kiralama için KM kullanımı
+
+# 📊 Grafikler & İstatistikler
+- 🥧 **Pasta Grafik** - Araç durumu dağılımı (Müsait/Kirada)
+- 📊 **Bar Grafik** - Araç, Kullanıcı, Kiralama istatistikleri
+- Otomatik güncelleme
+- Renkli ve profesyonel tasarım
+
+# 📄 Raporlar
+- 📋 **Genel İstatistikler** - Araç, Kullanıcı, Kiralama sayıları
+- 💰 **Gelir Raporu** - Toplam kiralama gelirleri
+- 🚗 **Araç Raporu** - Tüm araçların durumu
+- 👥 **Kullanıcı Raporu** - Müşteri bilgileri ve kiralama sayıları
+- 🔑 **Kiralama Detayları** - Tüm kiralamalar ve ücretler
 
 
