@@ -1,6 +1,8 @@
 import sys
 from datetime import datetime, timedelta
 import sqlite3
+import random
+import string
 from contextlib import contextmanager
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -191,6 +193,23 @@ class DatabaseManager:
                     durum TEXT DEFAULT 'Devam ediyor',
                     FOREIGN KEY (arac_id) REFERENCES araclar (arac_id),
                     FOREIGN KEY (musteri_id) REFERENCES musteriler (musteri_id)
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS hediyeler (
+                    hediye_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    gonderen_musteri_id INTEGER NOT NULL,
+                    alan_musteri_id INTEGER NOT NULL,
+                    arac_id INTEGER NOT NULL,
+                    gunluk_fiyat REAL NOT NULL,
+                    hediye_kodu TEXT UNIQUE NOT NULL,
+                    not_mesaji TEXT,
+                    durum TEXT DEFAULT 'Beklemede',
+                    olusturma_tarihi TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (gonderen_musteri_id) REFERENCES musteriler (musteri_id),
+                    FOREIGN KEY (alan_musteri_id) REFERENCES musteriler (musteri_id),
+                    FOREIGN KEY (arac_id) REFERENCES araclar (arac_id)
                 )
             ''')
 
@@ -389,6 +408,99 @@ class DatabaseManager:
             cursor.execute('SELECT COUNT(*) as count FROM kiralamalar WHERE bitis IS NULL')
             return cursor.fetchone()['count']
 
+    # ============ HEDİYE METODLARI ============
+
+    def hediye_olustur(self, gonderen_id, alan_id, arac_id, gun_sayisi, not_mesaji=""):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            hediye_kodu = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+            cursor.execute('''
+                INSERT INTO hediyeler (gonderen_musteri_id, alan_musteri_id, arac_id, gunluk_fiyat, hediye_kodu, not_mesaji, durum)
+                VALUES (?, ?, ?, ?, ?, ?, 'Beklemede')
+            ''', (gonderen_id, alan_id, arac_id, 0, hediye_kodu, not_mesaji))
+
+            return hediye_kodu
+
+    def hediyeleri_getir(self, musteri_id=None):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if musteri_id:
+                cursor.execute('''
+                    SELECT h.*,
+                           g.ad as gonderen_ad, g.soyad as gonderen_soyad,
+                           a.ad as alan_ad, a.soyad as alan_soyad,
+                           ar.marka, ar.model, ar.plaka, ar.yil
+                    FROM hediyeler h
+                    JOIN musteriler g ON h.gonderen_musteri_id = g.musteri_id
+                    JOIN musteriler a ON h.alan_musteri_id = a.musteri_id
+                    JOIN araclar ar ON h.arac_id = ar.arac_id
+                    WHERE h.gonderen_musteri_id = ? OR h.alan_musteri_id = ?
+                    ORDER BY h.olusturma_tarihi DESC
+                ''', (musteri_id, musteri_id))
+            else:
+                cursor.execute('''
+                    SELECT h.*,
+                           g.ad as gonderen_ad, g.soyad as gonderen_soyad,
+                           a.ad as alan_ad, a.soyad as alan_soyad,
+                           ar.marka, ar.model, ar.plaka, ar.yil
+                    FROM hediyeler h
+                    JOIN musteriler g ON h.gonderen_musteri_id = g.musteri_id
+                    JOIN musteriler a ON h.alan_musteri_id = a.musteri_id
+                    JOIN araclar ar ON h.arac_id = ar.arac_id
+                    ORDER BY h.olusturma_tarihi DESC
+                ''')
+            return [dict(row) for row in cursor.fetchall()]
+
+    def hediye_kullan(self, hediye_kodu, kullanan_musteri_id):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT * FROM hediyeler WHERE hediye_kodu = ? AND durum = "Beklemede"', (hediye_kodu,))
+            hediye = cursor.fetchone()
+
+            if not hediye:
+                raise ValueError("Geçersiz veya kullanılmış hediye kodu!")
+
+            if hediye['alan_musteri_id'] != kullanan_musteri_id:
+                raise ValueError("Bu hediye kodu size ait değil!")
+
+            cursor.execute('''
+                UPDATE hediyeler SET durum = 'Kullanıldı' WHERE hediye_kodu = ?
+            ''', (hediye_kodu,))
+
+            cursor.execute('SELECT kilometre FROM araclar WHERE arac_id = ?', (hediye['arac_id'],))
+            arac = cursor.fetchone()
+            arac_km = arac['kilometre'] if arac else 0
+
+            cursor.execute('''
+                INSERT INTO kiralamalar (arac_id, musteri_id, gunluk_fiyat, baslangic, baslangic_km, durum)
+                VALUES (?, ?, ?, ?, ?, 'Devam ediyor')
+            ''', (hediye['arac_id'], hediye['alan_musteri_id'], 0, datetime.now(), arac_km))
+
+            cursor.execute('UPDATE araclar SET musait_mi = 0 WHERE arac_id = ?', (hediye['arac_id'],))
+
+            cursor.execute('SELECT ad, soyad FROM musteriler WHERE musteri_id = ?', (hediye['gonderen_musteri_id'],))
+            gonderen = cursor.fetchone()
+
+            cursor.execute('SELECT marka, model FROM araclar WHERE arac_id = ?', (hediye['arac_id'],))
+            arac_bilgi = cursor.fetchone()
+
+            return {
+                'gonderen_ad': gonderen['ad'] if gonderen else '',
+                'gonderen_soyad': gonderen['soyad'] if gonderen else '',
+                'marka': arac_bilgi['marka'] if arac_bilgi else '',
+                'model': arac_bilgi['model'] if arac_bilgi else ''
+            }
+
+    def hediye_iptal(self, hediye_id):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE hediyeler SET durum = 'İptal Edildi' WHERE hediye_id = ?
+            ''', (hediye_id,))
+
 
 # ============ YARDIMCI FONKSİYONLAR ==========
 
@@ -399,7 +511,7 @@ def telefon_gecerli_mi(telefon):
     return telefon.isdigit() and len(telefon) >= 10
 
 
-# ============ LOGIN DIALOG ============
+# ============ LOGIN DIALOG ==========
 
 class LoginDialog(QDialog):
     def __init__(self, db, parent=None):
@@ -856,6 +968,93 @@ class SistemKullaniciDialog(QDialog):
             QMessageBox.warning(self, "Hata", "Tüm alanları doldurun!")
 
 
+class HediyeOlusturDialog(QDialog):
+    def __init__(self, musteriler, araclar, parent=None):
+        super().__init__(parent)
+        self.musteriler = musteriler
+        self.araclar = [a for a in araclar if a['musait_mi']]
+        self.setWindowTitle("Hediye Kiralama Oluştur")
+        self.setGeometry(200, 200, 550, 600)
+        self.setStyleSheet(MODERN_STYLE)
+        self.init_ui()
+        self.result = None
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        baslik = QLabel("🎁 Hediye Kiralama Oluştur")
+        baslik.setFont(QFont("Arial", 14, QFont.Bold))
+        baslik.setAlignment(Qt.AlignCenter)
+        baslik.setStyleSheet("color: #f5a623; margin-bottom: 10px;")
+
+        aciklama = QLabel("Bir arkadaşınıza araba kiralamayı hediye edin!")
+        aciklama.setAlignment(Qt.AlignCenter)
+        aciklama.setStyleSheet("color: #e2e2e2; margin-bottom: 15px;")
+
+        grid = QGridLayout()
+        grid.setSpacing(12)
+
+        grid.addWidget(QLabel("Siz (Gönderen):"), 0, 0)
+        self.gonderen_combo = QComboBox()
+        for mus in self.musteriler:
+            self.gonderen_combo.addItem(f"👤 {mus['ad']} {mus['soyad']} - {mus['telefon']}", mus['musteri_id'])
+        grid.addWidget(self.gonderen_combo, 0, 1)
+
+        grid.addWidget(QLabel("Hediye Alacak Kişi:"), 1, 0)
+        self.alan_combo = QComboBox()
+        for mus in self.musteriler:
+            self.alan_combo.addItem(f"🎁 {mus['ad']} {mus['soyad']} - {mus['telefon']}", mus['musteri_id'])
+        grid.addWidget(self.alan_combo, 1, 1)
+
+        grid.addWidget(QLabel("Hediye Edilecek Araç:"), 2, 0)
+        self.arac_combo = QComboBox()
+        for arac in self.araclar:
+            self.arac_combo.addItem(f"🚗 {arac['marka']} {arac['model']} ({arac['yil']}) - {arac['plaka']}", arac['arac_id'])
+        grid.addWidget(self.arac_combo, 2, 1)
+
+        grid.addWidget(QLabel("Hediye Notu:"), 3, 0)
+        self.not_text = QTextEdit()
+        self.not_text.setPlaceholderText("Hediye notunuzu buraya yazabilirsiniz...\nÖrn: Doğum günün kutlu olsun! 🎂")
+        self.not_text.setMaximumHeight(100)
+        grid.addWidget(self.not_text, 3, 1)
+
+        layout.addWidget(baslik)
+        layout.addWidget(aciklama)
+        layout.addLayout(grid)
+
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)
+        olustur_btn = QPushButton("🎁 Hediyeyi Oluştur")
+        olustur_btn.setStyleSheet("background-color: #f5a623; padding: 12px; border-radius: 8px; font-weight: bold;")
+        olustur_btn.clicked.connect(self.olustur)
+        iptal_btn = QPushButton("✗ İptal")
+        iptal_btn.setStyleSheet("background-color: #f05454; padding: 12px; border-radius: 8px; font-weight: bold;")
+        iptal_btn.clicked.connect(self.reject)
+        button_layout.addWidget(olustur_btn)
+        button_layout.addWidget(iptal_btn)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def olustur(self):
+        gonderen_id = self.gonderen_combo.currentData()
+        alan_id = self.alan_combo.currentData()
+        arac_id = self.arac_combo.currentData()
+        not_mesaji = self.not_text.toPlainText()
+
+        if gonderen_id == alan_id:
+            QMessageBox.warning(self, "Hata", "Kendinize hediye gönderemezsiniz!")
+            return
+
+        if gonderen_id and alan_id and arac_id:
+            self.result = (gonderen_id, alan_id, arac_id, 1, not_mesaji)
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Hata", "Tüm alanları doldurun!")
+
+
 # ============ GRAFİKLER ==========
 
 class ModernStatisticsWidget(QWidget):
@@ -932,6 +1131,7 @@ class AracKiralamaMainWindow(QMainWindow):
         self.arac_listele()
         self.musteri_listele()
         self.kir_listele()
+        self.hediye_listele()
         if self.kullanici['rol'] == 'admin':
             self.sistem_kullanici_listele()
         self.refresh_all()
@@ -960,7 +1160,6 @@ class AracKiralamaMainWindow(QMainWindow):
         right_layout.setSpacing(15)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Arama kutusu (DÜZELTİLMİŞ - imleç sadece tıklanınca aktif)
         search_frame = QFrame()
         search_frame.setStyleSheet("""
             QFrame {
@@ -1002,12 +1201,10 @@ class AracKiralamaMainWindow(QMainWindow):
         search_layout.addWidget(self.search_input)
         search_frame.setLayout(search_layout)
 
-        # Kullanıcı bilgisi
         kullanici_label = QLabel(f"👤 {self.kullanici['ad']} {self.kullanici['soyad']} [{self.kullanici['rol']}]")
         kullanici_label.setFont(QFont("Arial", 11, QFont.Bold))
         kullanici_label.setStyleSheet("color: #00adb5; background-color: #1a1a2e; padding: 8px 15px; border-radius: 20px;")
 
-        # Çıkış butonu
         cikis_btn = QPushButton("🚪 Çıkış")
         cikis_btn.setStyleSheet("background-color: #f05454; padding: 8px 20px; border-radius: 20px; font-weight: bold;")
         cikis_btn.clicked.connect(self.cikis_yap)
@@ -1043,37 +1240,19 @@ class AracKiralamaMainWindow(QMainWindow):
 
         # Sekmeler
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane {
-                background-color: #1a1a2e;
-                border-radius: 10px;
-            }
-            QTabBar::tab {
-                background-color: #16213e;
-                color: #e2e2e2;
-                padding: 12px 35px;
-                margin-right: 5px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QTabBar::tab:selected {
-                background-color: #00adb5;
-                color: white;
-            }
-        """)
         self.tabs.currentChanged.connect(self.sekme_degisti)
 
         self.arac_tab = self.create_arac_tab()
         self.musteri_tab = self.create_musteri_tab()
         self.kir_tab = self.create_kir_tab()
+        self.hediye_tab = self.create_hediye_tab()
         self.stats_widget = ModernStatisticsWidget(self.db)
         self.rapor_tab = self.create_rapor_tab()
 
         self.tabs.addTab(self.arac_tab, "  🚗 Araçlar  ")
         self.tabs.addTab(self.musteri_tab, "  👥 Müşteriler  ")
         self.tabs.addTab(self.kir_tab, "  🔑 Kiralamalar  ")
+        self.tabs.addTab(self.hediye_tab, "  🎁 Hediyeler  ")
         self.tabs.addTab(self.stats_widget, "  📊 İstatistikler  ")
         self.tabs.addTab(self.rapor_tab, "  📄 Raporlar  ")
 
@@ -1091,13 +1270,13 @@ class AracKiralamaMainWindow(QMainWindow):
         self.timer.start(1000)
 
     def arama_yap(self):
-        """Arama yap - tüm sekmelerde ara"""
         arama_metni = self.search_input.text().strip().lower()
 
         if not arama_metni:
             self.arac_listele()
             self.musteri_listele()
             self.kir_listele()
+            self.hediye_listele()
             if self.kullanici['rol'] == 'admin':
                 self.sistem_kullanici_listele()
             return
@@ -1173,7 +1352,34 @@ class AracKiralamaMainWindow(QMainWindow):
                 self.kir_table.setItem(row, 6, QTableWidgetItem(f"{ucret:,.2f}"))
                 self.kir_table.setItem(row, 7, QTableWidgetItem(kir['durum']))
 
-        # Sistem kullanıcılarında ara (admin için)
+        # Hediyelerde ara
+        self.hediye_table.setRowCount(0)
+        for hediye in self.db.hediyeleri_getir():
+            if (arama_metni in hediye.get('gonderen_ad', '').lower() or
+                arama_metni in hediye.get('gonderen_soyad', '').lower() or
+                arama_metni in hediye.get('alan_ad', '').lower() or
+                arama_metni in hediye.get('alan_soyad', '').lower() or
+                arama_metni in hediye.get('marka', '').lower() or
+                arama_metni in hediye.get('model', '').lower() or
+                arama_metni in hediye.get('hediye_kodu', '').lower() or
+                arama_metni in hediye.get('durum', '').lower()):
+                row = self.hediye_table.rowCount()
+                self.hediye_table.insertRow(row)
+                self.hediye_table.setItem(row, 0, QTableWidgetItem(str(hediye['hediye_id'])))
+                self.hediye_table.setItem(row, 1, QTableWidgetItem(hediye['hediye_kodu']))
+                self.hediye_table.setItem(row, 2, QTableWidgetItem(f"{hediye['gonderen_ad']} {hediye['gonderen_soyad']}"))
+                self.hediye_table.setItem(row, 3, QTableWidgetItem(f"{hediye['alan_ad']} {hediye['alan_soyad']}"))
+                self.hediye_table.setItem(row, 4, QTableWidgetItem(f"{hediye['marka']} {hediye['model']}"))
+                self.hediye_table.setItem(row, 5, QTableWidgetItem("🎁 Hediye"))
+                durum_widget = QTableWidgetItem(hediye['durum'])
+                if hediye['durum'] == 'Kullanıldı':
+                    durum_widget.setForeground(QColor("#4ecca3"))
+                elif hediye['durum'] == 'İptal Edildi':
+                    durum_widget.setForeground(QColor("#f05454"))
+                else:
+                    durum_widget.setForeground(QColor("#f5a623"))
+                self.hediye_table.setItem(row, 6, durum_widget)
+
         if self.kullanici['rol'] == 'admin':
             self.kullanici_table.setRowCount(0)
             for k in self.db.kullanicilari_getir():
@@ -1196,7 +1402,6 @@ class AracKiralamaMainWindow(QMainWindow):
                     self.kullanici_table.setItem(row, 5, durum_widget)
 
     def sekme_degisti(self, index):
-        """Sekme değiştiğinde aramayı temizle ve yeniden listele"""
         if not self.search_input.text():
             return
         self.arama_yap()
@@ -1362,8 +1567,12 @@ class AracKiralamaMainWindow(QMainWindow):
         baslat_btn.setStyleSheet("background-color: #00adb5; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
         baslat_btn.clicked.connect(self.kir_baslat)
 
+        hediye_et_btn = QPushButton("🎁 Hediye Et")
+        hediye_et_btn.setStyleSheet("background-color: #f5a623; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
+        hediye_et_btn.clicked.connect(self.hediye_et)
+
         bitir_btn = QPushButton("🔓 Kiralama Bitir")
-        bitir_btn.setStyleSheet("background-color: #f5a623; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
+        bitir_btn.setStyleSheet("background-color: #f05454; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
         bitir_btn.clicked.connect(self.kir_bitir)
 
         yenile_btn = QPushButton("🔄 Yenile")
@@ -1371,6 +1580,7 @@ class AracKiralamaMainWindow(QMainWindow):
         yenile_btn.clicked.connect(self.kir_listele)
 
         button_layout.addWidget(baslat_btn)
+        button_layout.addWidget(hediye_et_btn)
         button_layout.addWidget(bitir_btn)
         button_layout.addWidget(yenile_btn)
         button_layout.addStretch()
@@ -1387,6 +1597,50 @@ class AracKiralamaMainWindow(QMainWindow):
         widget.setLayout(layout)
         return widget
 
+    def create_hediye_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+
+        button_panel = QFrame()
+        button_panel.setStyleSheet("background-color: #16213e; border-radius: 10px; padding: 10px;")
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)
+
+        hediye_olustur_btn = QPushButton("🎁 Yeni Hediye Oluştur")
+        hediye_olustur_btn.setStyleSheet("background-color: #f5a623; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
+        hediye_olustur_btn.clicked.connect(self.hediye_olustur)
+
+        hediye_kullan_btn = QPushButton("🎁 Hediye Kodu Kullan")
+        hediye_kullan_btn.setStyleSheet("background-color: #00adb5; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
+        hediye_kullan_btn.clicked.connect(self.hediye_kullan)
+
+        hediye_iptal_btn = QPushButton("❌ Seçili Hediyeyi İptal Et")
+        hediye_iptal_btn.setStyleSheet("background-color: #f05454; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
+        hediye_iptal_btn.clicked.connect(self.hediye_iptal)
+
+        yenile_btn = QPushButton("🔄 Yenile")
+        yenile_btn.setStyleSheet("background-color: #0f3460; padding: 10px 25px; border-radius: 8px; font-weight: bold;")
+        yenile_btn.clicked.connect(self.hediye_listele)
+
+        button_layout.addWidget(hediye_olustur_btn)
+        button_layout.addWidget(hediye_kullan_btn)
+        button_layout.addWidget(hediye_iptal_btn)
+        button_layout.addWidget(yenile_btn)
+        button_layout.addStretch()
+        button_panel.setLayout(button_layout)
+
+        self.hediye_table = QTableWidget()
+        self.hediye_table.setColumnCount(7)
+        self.hediye_table.setHorizontalHeaderLabels(["ID", "Hediye Kodu", "Gönderen", "Alan", "Araç", "Ücret", "Durum"])
+        self.hediye_table.setAlternatingRowColors(True)
+        self.hediye_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        layout.addWidget(button_panel)
+        layout.addWidget(self.hediye_table)
+        widget.setLayout(layout)
+        return widget
+
     def create_rapor_tab(self):
         widget = QWidget()
         layout = QVBoxLayout()
@@ -1398,17 +1652,6 @@ class AracKiralamaMainWindow(QMainWindow):
 
         self.rapor_text = QTextEdit()
         self.rapor_text.setReadOnly(True)
-        self.rapor_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #16213e;
-                border: 1px solid #00adb5;
-                border-radius: 10px;
-                padding: 15px;
-                font-family: 'Courier New', monospace;
-                font-size: 12px;
-                line-height: 1.5;
-            }
-        """)
 
         layout.addWidget(rapor_btn, alignment=Qt.AlignLeft)
         layout.addWidget(self.rapor_text)
@@ -1453,6 +1696,8 @@ class AracKiralamaMainWindow(QMainWindow):
         layout.addWidget(self.kullanici_table)
         widget.setLayout(layout)
         return widget
+
+    # ============ ARAÇ METODLARI ============
 
     def arac_ekle(self):
         try:
@@ -1499,6 +1744,8 @@ class AracKiralamaMainWindow(QMainWindow):
                 durum_widget.setForeground(QColor("#4ecca3"))
             self.arac_table.setItem(row, 6, durum_widget)
 
+    # ============ MÜŞTERİ METODLARI ============
+
     def musteri_ekle(self):
         try:
             dialog = MusteriEkleDialog(self)
@@ -1533,6 +1780,8 @@ class AracKiralamaMainWindow(QMainWindow):
             self.musteri_table.setItem(row, 3, QTableWidgetItem(mus['ehliyet_no']))
             self.musteri_table.setItem(row, 4, QTableWidgetItem(mus['telefon']))
             self.musteri_table.setItem(row, 5, QTableWidgetItem(mus['email']))
+
+    # ============ KİRALAMA METODLARI ============
 
     def kir_baslat(self):
         araclar = self.db.araclari_getir()
@@ -1616,6 +1865,181 @@ class AracKiralamaMainWindow(QMainWindow):
             self.kir_table.setItem(row, 6, QTableWidgetItem(f"{ucret:,.2f}"))
             self.kir_table.setItem(row, 7, QTableWidgetItem(kir['durum']))
 
+    def hediye_et(self):
+        musteriler = self.db.musterileri_getir()
+        araclar = self.db.araclari_getir()
+
+        if len(musteriler) < 2:
+            QMessageBox.warning(self, "Hata", "Hediye göndermek için en az 2 müşteri olmalı!")
+            return
+
+        musait_araclar = [a for a in araclar if a['musait_mi']]
+        if not musait_araclar:
+            QMessageBox.warning(self, "Hata", "Hediye edilecek müsait araç bulunamadı!")
+            return
+
+        dialog = HediyeOlusturDialog(musteriler, araclar, self)
+        if dialog.exec_() == QDialog.Accepted and dialog.result:
+            gonderen_id, alan_id, arac_id, gun_sayisi, not_mesaji = dialog.result
+
+            try:
+                hediye_kodu = self.db.hediye_olustur(gonderen_id, alan_id, arac_id, gun_sayisi, not_mesaji)
+
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Hediye Oluşturuldu")
+                msg.setText(f"🎉 Hediye başarıyla oluşturuldu!\n\n"
+                           f"Hediye Kodu: {hediye_kodu}\n\n"
+                           f"Bu kodu hediye ettiğiniz kişiyle paylaşın.\n"
+                           f"Hediye alan kişi bu kodu 'Hediyeler' sekmesinden kullanabilir.")
+                msg.setStyleSheet(MODERN_STYLE)
+                msg.exec_()
+
+                self.hediye_listele()
+            except Exception as e:
+                QMessageBox.warning(self, "Hata", str(e))
+
+    def hediye_olustur(self):
+        musteriler = self.db.musterileri_getir()
+        araclar = self.db.araclari_getir()
+
+        if len(musteriler) < 2:
+            QMessageBox.warning(self, "Hata", "Hediye göndermek için en az 2 müşteri olmalı!")
+            return
+
+        musait_araclar = [a for a in araclar if a['musait_mi']]
+        if not musait_araclar:
+            QMessageBox.warning(self, "Hata", "Hediye edilecek müsait araç bulunamadı!")
+            return
+
+        dialog = HediyeOlusturDialog(musteriler, araclar, self)
+        if dialog.exec_() == QDialog.Accepted and dialog.result:
+            gonderen_id, alan_id, arac_id, gun_sayisi, not_mesaji = dialog.result
+
+            try:
+                hediye_kodu = self.db.hediye_olustur(gonderen_id, alan_id, arac_id, gun_sayisi, not_mesaji)
+
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Hediye Oluşturuldu")
+                msg.setText(f"🎉 Hediye başarıyla oluşturuldu!\n\n"
+                           f"Hediye Kodu: {hediye_kodu}\n\n"
+                           f"Bu kodu hediye ettiğiniz kişiyle paylaşın.\n"
+                           f"Hediye alan kişi bu kodu kullanarak kiralamayı başlatabilir.")
+                msg.setStyleSheet(MODERN_STYLE)
+                msg.exec_()
+
+                self.hediye_listele()
+            except Exception as e:
+                QMessageBox.warning(self, "Hata", str(e))
+
+    def hediye_kullan(self):
+        musteriler = self.db.musterileri_getir()
+
+        if not musteriler:
+            QMessageBox.warning(self, "Hata", "Kayıtlı müşteri bulunamadı!")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Hediye Kullan")
+        dialog.setGeometry(200, 200, 400, 300)
+        dialog.setStyleSheet(MODERN_STYLE)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Müşteri Seçin:"))
+
+        musteri_combo = QComboBox()
+        for mus in musteriler:
+            musteri_combo.addItem(f"{mus['ad']} {mus['soyad']} - {mus['telefon']}", mus['musteri_id'])
+        layout.addWidget(musteri_combo)
+
+        layout.addWidget(QLabel("Hediye Kodu:"))
+        kod_input = QLineEdit()
+        kod_input.setPlaceholderText("Hediye kodunu girin")
+        kod_input.setStyleSheet("font-family: monospace; font-size: 14px;")
+        layout.addWidget(kod_input)
+
+        button_layout = QHBoxLayout()
+        kullan_btn = QPushButton("Kullan")
+        kullan_btn.setStyleSheet("background-color: #00adb5;")
+        iptal_btn = QPushButton("İptal")
+        iptal_btn.setStyleSheet("background-color: #f05454;")
+        button_layout.addWidget(kullan_btn)
+        button_layout.addWidget(iptal_btn)
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+
+        def kullan():
+            musteri_id = musteri_combo.currentData()
+            hediye_kodu = kod_input.text().strip().upper()
+
+            if not hediye_kodu:
+                QMessageBox.warning(dialog, "Hata", "Hediye kodunu giriniz!")
+                return
+
+            try:
+                result = self.db.hediye_kullan(hediye_kodu, musteri_id)
+                QMessageBox.information(dialog, "Başarılı",
+                    f"🎁 Hediye başarıyla kullanıldı!\n\n"
+                    f"Hediye eden: {result['gonderen_ad']} {result['gonderen_soyad']}\n"
+                    f"Hediye edilen araç: {result['marka']} {result['model']}\n\n"
+                    f"✨ Bu hediye tamamen ücretsizdir! ✨\n"
+                    f"Hediyeniz aktifleştirildi! Kiralama işleminiz başlatıldı.")
+                dialog.accept()
+                self.arac_listele()
+                self.kir_listele()
+                self.hediye_listele()
+            except ValueError as e:
+                QMessageBox.warning(dialog, "Hata", str(e))
+
+        kullan_btn.clicked.connect(kullan)
+        iptal_btn.clicked.connect(dialog.reject)
+
+        dialog.exec_()
+
+    def hediye_iptal(self):
+        row = self.hediye_table.currentRow()
+        if row >= 0:
+            hediye_id = int(self.hediye_table.item(row, 0).text())
+            durum = self.hediye_table.item(row, 6).text()
+
+            if durum != "Beklemede":
+                QMessageBox.warning(self, "Hata", "Sadece bekleyen hediyeler iptal edilebilir!")
+                return
+
+            if QMessageBox.question(self, "Onay", "Bu hediyeyi iptal etmek istediğinize emin misiniz?",
+                                   QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+                try:
+                    self.db.hediye_iptal(hediye_id)
+                    QMessageBox.information(self, "Başarılı", "Hediye iptal edildi!")
+                    self.hediye_listele()
+                except Exception as e:
+                    QMessageBox.warning(self, "Hata", str(e))
+        else:
+            QMessageBox.warning(self, "Hata", "Lütfen iptal edilecek hediyeyi seçin!")
+
+    def hediye_listele(self):
+        self.hediye_table.setRowCount(0)
+        for hediye in self.db.hediyeleri_getir():
+            row = self.hediye_table.rowCount()
+            self.hediye_table.insertRow(row)
+            self.hediye_table.setItem(row, 0, QTableWidgetItem(str(hediye['hediye_id'])))
+            self.hediye_table.setItem(row, 1, QTableWidgetItem(hediye['hediye_kodu']))
+            self.hediye_table.setItem(row, 2, QTableWidgetItem(f"{hediye['gonderen_ad']} {hediye['gonderen_soyad']}"))
+            self.hediye_table.setItem(row, 3, QTableWidgetItem(f"{hediye['alan_ad']} {hediye['alan_soyad']}"))
+            self.hediye_table.setItem(row, 4, QTableWidgetItem(f"{hediye['marka']} {hediye['model']}"))
+            self.hediye_table.setItem(row, 5, QTableWidgetItem("🎁 Hediye"))
+
+            durum_widget = QTableWidgetItem(hediye['durum'])
+            if hediye['durum'] == 'Kullanıldı':
+                durum_widget.setForeground(QColor("#4ecca3"))
+            elif hediye['durum'] == 'İptal Edildi':
+                durum_widget.setForeground(QColor("#f05454"))
+            else:
+                durum_widget.setForeground(QColor("#f5a623"))
+            self.hediye_table.setItem(row, 6, durum_widget)
+
+    # ============ SİSTEM KULLANICI METODLARI ============
+
     def sistem_kullanici_ekle(self):
         try:
             dialog = SistemKullaniciDialog(self)
@@ -1663,10 +2087,13 @@ class AracKiralamaMainWindow(QMainWindow):
                 durum_widget.setForeground(QColor("#f05454"))
             self.kullanici_table.setItem(row, 5, durum_widget)
 
+    # ============ RAPOR METODLARI ============
+
     def rapor_olustur(self):
         araclar = self.db.araclari_getir()
         musteriler = self.db.musterileri_getir()
         kiralamalar = self.db.kiralamalari_getir()
+        hediyeler = self.db.hediyeleri_getir()
         sistem_kullanicilar = self.db.kullanicilari_getir()
         aktif_kiralama = self.db.aktif_kiralama_sayisi()
 
@@ -1683,6 +2110,8 @@ class AracKiralamaMainWindow(QMainWindow):
         rapor += f"│ Toplam Müşteri Sayısı      : {len(musteriler):>15} │\n"
         rapor += f"│ Toplam Kiralama Sayısı     : {len(kiralamalar):>15} │\n"
         rapor += f"│ Tamamlanan Kiralama Sayısı : {len([k for k in kiralamalar if k['durum'] == 'Tamamlandı']):>15} │\n"
+        rapor += f"│ Toplam Hediye Sayısı       : {len(hediyeler):>15} │\n"
+        rapor += f"│ Kullanılan Hediye Sayısı   : {len([h for h in hediyeler if h['durum'] == 'Kullanıldı']):>15} │\n"
         rapor += f"│ Sistem Kullanıcı Sayısı    : {len(sistem_kullanicilar):>15} │\n"
         rapor += "└" + "─"*40 + "┘\n\n"
 
