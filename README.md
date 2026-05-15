@@ -1,7 +1,9 @@
 # 🚗 Premium Araç Kiralama Sistemi
 
 Modern, kullanıcı dostu ve tam donanımlı bir araç kiralama yönetim sistemi. PyQt5 ile geliştirilmiş, SQLite veritabanı desteğine sahip, grafiksel raporlama ve kullanıcı yönetimi özellikleriyle donatılmıştır.
-
+ user= admin
+ password = admin123
+ 
 # 📋 Özellikler
 
 # 🔐 Kullanıcı Yönetimi
